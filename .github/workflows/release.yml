@@ -55,7 +55,13 @@ jobs:
             --hidden-import tkinter.filedialog \
             main.py
 
-      - name: Package zip
+      - name: Package zip (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path "${{ matrix.binary }}" -DestinationPath "hazel-${{ github.ref_name }}-${{ matrix.platform }}.zip"
+
+      - name: Package zip (Linux / macOS)
+        if: matrix.platform != 'windows'
         run: zip "hazel-${{ github.ref_name }}-${{ matrix.platform }}.zip" "${{ matrix.binary }}"
 
       - name: Upload artifact
