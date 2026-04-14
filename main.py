@@ -540,6 +540,314 @@ def run_revert() -> None:
     blank()
 
 
+# ─── File Picker ──────────────────────────────────────────────────────────────
+
+def pick_file(prompt: str, default: str = "", filetypes=None) -> str | None:
+    """Open a native OS file-picker dialog. Returns path or None if cancelled."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        result = filedialog.askopenfilename(
+            title=prompt,
+            initialdir=default if default and os.path.isdir(default) else os.getcwd(),
+            filetypes=filetypes or [("All files", "*.*")],
+        )
+        root.destroy()
+        return os.path.normpath(result) if result else None
+    except Exception:
+        return None
+
+
+# ─── Tools Submenu ────────────────────────────────────────────────────────────
+
+def tool_exif_viewer(cfg: dict) -> None:
+    """Display EXIF metadata for a chosen photo."""
+    section("EXIF Viewer")
+    info("Pick an image to inspect its metadata.")
+    blank()
+
+    path = pick_file(
+        "Select a photo",
+        default=cfg.get("import", ""),
+        filetypes=[
+            ("Images", "*.jpg *.jpeg *.tif *.tiff *.cr2 *.cr3 *.nef *.arw *.dng *.orf *.rw2 *.raf"),
+            ("All files", "*.*"),
+        ],
+    )
+    if not path:
+        info("Cancelled.")
+        return
+
+    blank()
+    info(f"File : {os.path.basename(path)}")
+    info(f"Size : {_fmt_bytes(os.path.getsize(path))}")
+    divider()
+
+    try:
+        import exifread
+        with open(path, "rb") as f:
+            tags = exifread.process_file(f, details=False)
+    except Exception as exc:
+        err(f"Could not read EXIF: {exc}")
+        blank()
+        questionary.press_any_key_to_continue("  Press any key...").ask()
+        return
+
+    FIELDS = [
+        ("Camera make",        ["Image Make"]),
+        ("Camera model",       ["Image Model"]),
+        ("Lens",               ["EXIF LensModel", "EXIF LensSpecification"]),
+        ("Date / Time",        ["EXIF DateTimeOriginal", "Image DateTime"]),
+        ("Shutter speed",      ["EXIF ExposureTime"]),
+        ("Aperture",           ["EXIF FNumber"]),
+        ("ISO",                ["EXIF ISOSpeedRatings"]),
+        ("Focal length",       ["EXIF FocalLength"]),
+        ("Focal length (35mm)",["EXIF FocalLengthIn35mmFilm"]),
+        ("Exposure mode",      ["EXIF ExposureMode"]),
+        ("Metering mode",      ["EXIF MeteringMode"]),
+        ("Flash",              ["EXIF Flash"]),
+        ("White balance",      ["EXIF WhiteBalance"]),
+        ("GPS latitude",       ["GPS GPSLatitude"]),
+        ("GPS longitude",      ["GPS GPSLongitude"]),
+        ("Software",           ["Image Software"]),
+    ]
+
+    found_any = False
+    for label, keys in FIELDS:
+        for key in keys:
+            if key in tags:
+                val = str(tags[key])
+                print(Fore.CYAN + f"  {label:<24}" + Fore.WHITE + val)
+                found_any = True
+                break
+
+    if not found_any:
+        warn("No EXIF data found in this file.")
+
+    blank()
+    questionary.press_any_key_to_continue("  Press any key...").ask()
+
+
+def tool_duplicate_finder(cfg: dict) -> None:
+    """Find files with identical content in a folder."""
+    import hashlib
+    from collections import defaultdict
+
+    section("Duplicate Finder")
+    info("Scans a folder and finds files with identical content.")
+    blank()
+
+    folder = pick_folder("Select folder to scan for duplicates", default=cfg.get("export", ""))
+    if not folder:
+        info("Cancelled.")
+        return
+
+    blank()
+    with _Spinner("Hashing files..."):
+        hashes: dict[str, list[str]] = defaultdict(list)
+        for root_dir, _, files in os.walk(folder):
+            for fname in files:
+                fpath = os.path.join(root_dir, fname)
+                try:
+                    h = hashlib.md5()
+                    with open(fpath, "rb") as f:
+                        while chunk := f.read(65536):
+                            h.update(chunk)
+                    hashes[h.hexdigest()].append(fpath)
+                except (PermissionError, OSError):
+                    pass
+
+    dupes = {h: paths for h, paths in hashes.items() if len(paths) > 1}
+
+    if not dupes:
+        ok("No duplicates found.")
+    else:
+        total_wasted = 0
+        warn(f"Found {len(dupes)} group(s) of duplicate files:")
+        blank()
+        for i, (_, paths) in enumerate(dupes.items(), 1):
+            try:
+                size = os.path.getsize(paths[0])
+            except OSError:
+                size = 0
+            wasted = size * (len(paths) - 1)
+            total_wasted += wasted
+            print(
+                Fore.CYAN + f"  Group {i}  "
+                + Style.DIM + f"({_fmt_bytes(size)} each, {len(paths)} copies, wastes {_fmt_bytes(wasted)})"
+            )
+            for p in paths:
+                rel = os.path.relpath(p, folder)
+                dim(f"    {rel}")
+            blank()
+        warn(f"Total wasted space: {_fmt_bytes(total_wasted)}")
+
+    blank()
+    questionary.press_any_key_to_continue("  Press any key...").ask()
+
+
+def tool_storage_stats(cfg: dict) -> None:
+    """Show a storage breakdown of the export folder by year and file type."""
+    from collections import defaultdict
+
+    section("Storage Stats")
+    folder = cfg.get("export", "")
+    info(f"Scanning: {folder}")
+
+    if not os.path.isdir(folder):
+        err("Export folder not found. Set it in Settings first.")
+        blank()
+        questionary.press_any_key_to_continue("  Press any key...").ask()
+        return
+
+    blank()
+    with _Spinner("Counting files..."):
+        by_year: dict[str, list[int]] = defaultdict(list)
+        by_ext:  dict[str, list[int]] = defaultdict(list)
+        total_size = 0
+        total_files = 0
+
+        for root_dir, _, files in os.walk(folder):
+            for fname in files:
+                fpath = os.path.join(root_dir, fname)
+                try:
+                    size = os.path.getsize(fpath)
+                except OSError:
+                    continue
+                total_size += size
+                total_files += 1
+                ext = os.path.splitext(fname)[1].lstrip(".").upper() or "OTHER"
+                by_ext[ext].append(size)
+                # Year inferred from top-level subfolder name if it looks like a year
+                parts = os.path.relpath(fpath, folder).split(os.sep)
+                year = parts[0] if parts and parts[0].isdigit() and len(parts[0]) == 4 else "Unknown"
+                by_year[year].append(size)
+
+    print(Fore.WHITE + Style.BRIGHT + f"  Total: {total_files} files  ({_fmt_bytes(total_size)})")
+    blank()
+
+    if by_year:
+        print(Fore.CYAN + Style.BRIGHT + "  By Year")
+        for year in sorted(by_year):
+            sizes = by_year[year]
+            year_total = sum(sizes)
+            bar_len = int(28 * year_total / total_size) if total_size else 0
+            bar = "#" * bar_len
+            print(
+                Fore.WHITE + f"  {year}  "
+                + Fore.CYAN + Style.DIM + f"{bar:<28}"
+                + Fore.WHITE + f"  {len(sizes):>5} files  {_fmt_bytes(year_total):>9}"
+            )
+
+    blank()
+    if by_ext:
+        print(Fore.CYAN + Style.BRIGHT + "  By File Type  (top 12)")
+        for ext, sizes in sorted(by_ext.items(), key=lambda x: -sum(x[1]))[:12]:
+            ext_total = sum(sizes)
+            bar_len = int(28 * ext_total / total_size) if total_size else 0
+            bar = "#" * bar_len
+            print(
+                Fore.WHITE + f"  {ext:<8}"
+                + Fore.CYAN + Style.DIM + f"  {bar:<28}"
+                + Fore.WHITE + f"  {len(sizes):>5} files  {_fmt_bytes(ext_total):>9}"
+            )
+
+    blank()
+    questionary.press_any_key_to_continue("  Press any key...").ask()
+
+
+def tool_unpaired_raw(cfg: dict) -> None:
+    """Find RAW files missing a matching JPG, or JPGs missing a RAW."""
+    section("Unpaired RAW / JPG Finder")
+    info("Finds RAW files with no JPG pair, and JPGs with no RAW pair.")
+    info("Match is by filename stem (e.g. IMG_1234.CR2 <-> IMG_1234.JPG).")
+    blank()
+
+    folder = pick_folder("Select folder to scan", default=cfg.get("export", ""))
+    if not folder:
+        info("Cancelled.")
+        return
+
+    RAW_EXTS = {"cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f"}
+    JPG_EXTS  = {"jpg", "jpeg"}
+
+    blank()
+    with _Spinner("Scanning..."):
+        raws: dict[str, str] = {}
+        jpgs: dict[str, str] = {}
+
+        for root_dir, _, files in os.walk(folder):
+            for fname in files:
+                stem = os.path.splitext(fname)[0].upper()
+                ext  = os.path.splitext(fname)[1].lstrip(".").lower()
+                fpath = os.path.join(root_dir, fname)
+                if ext in RAW_EXTS:
+                    raws[stem] = fpath
+                elif ext in JPG_EXTS:
+                    jpgs[stem] = fpath
+
+    raws_only = {s: p for s, p in raws.items() if s not in jpgs}
+    jpgs_only  = {s: p for s, p in jpgs.items() if s not in raws}
+
+    if not raws and not jpgs:
+        warn("No RAW or JPG files found in this folder.")
+    elif not raws_only and not jpgs_only:
+        ok(f"All {len(raws)} RAW files have a matching JPG  (and vice versa).")
+    else:
+        if raws_only:
+            warn(f"{len(raws_only)} RAW file(s) with no matching JPG:")
+            for path in list(raws_only.values())[:20]:
+                dim(f"    {os.path.relpath(path, folder)}")
+            if len(raws_only) > 20:
+                info(f"    ... and {len(raws_only) - 20} more")
+            blank()
+        if jpgs_only:
+            warn(f"{len(jpgs_only)} JPG file(s) with no matching RAW:")
+            for path in list(jpgs_only.values())[:20]:
+                dim(f"    {os.path.relpath(path, folder)}")
+            if len(jpgs_only) > 20:
+                info(f"    ... and {len(jpgs_only) - 20} more")
+
+    blank()
+    questionary.press_any_key_to_continue("  Press any key...").ask()
+
+
+def menu_tools(cfg: dict) -> None:
+    """Useful mini-tools for photographers."""
+    while True:
+        blank()
+        divider()
+        print(Fore.CYAN + Style.BRIGHT + "  Tools")
+        divider()
+
+        choice = questionary.select(
+            "Select a tool:",
+            choices=[
+                questionary.Choice("EXIF Viewer       -- inspect camera metadata for a photo",    value="exif"),
+                questionary.Choice("Duplicate Finder  -- find identical files wasting space",      value="dupes"),
+                questionary.Choice("Storage Stats     -- size breakdown of your export folder",    value="stats"),
+                questionary.Choice("Unpaired RAW/JPG  -- find RAWs or JPGs without a pair",       value="unpaired"),
+                questionary.Choice("Back",                                                          value="back"),
+            ],
+            style=STYLE,
+        ).ask()
+
+        if choice is None or choice == "back":
+            return
+        elif choice == "exif":
+            tool_exif_viewer(cfg)
+        elif choice == "dupes":
+            tool_duplicate_finder(cfg)
+        elif choice == "stats":
+            tool_storage_stats(cfg)
+        elif choice == "unpaired":
+            tool_unpaired_raw(cfg)
+
+
 # ─── Settings Submenu ─────────────────────────────────────────────────────────
 
 def menu_settings(cfg: dict):
@@ -704,6 +1012,7 @@ def interactive_menu():
                 questionary.Choice("Move       -- organize and move files to export",      value="move"),
                 questionary.Choice("Copy       -- organize and copy (originals kept)",     value="copy"),
                 questionary.Choice("Revert     -- undo the last move operation",           value="revert"),
+                questionary.Choice("Tools      -- EXIF viewer, duplicates, stats & more", value="tools"),
                 questionary.Choice("Settings   -- change folders / options",               value="settings"),
                 questionary.Choice("Help       -- how Hazel works, key concepts and tips", value="help"),
                 questionary.Choice("Exit",                                                  value="exit"),
@@ -713,6 +1022,9 @@ def interactive_menu():
 
         if choice is None or choice == "exit":
             _exit()
+
+        elif choice == "tools":
+            menu_tools(cfg)
 
         elif choice == "settings":
             menu_settings(cfg)
