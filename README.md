@@ -71,10 +71,37 @@ From the menu you can:
 - **Move** -- organize and move files into the export folder
 - **Copy** -- organize and copy files, leaving originals in place
 - **Revert** -- undo the last Move operation
+- **Tools** -- small utilities for photographers (see below)
 - **Settings** -- change folders, session gap, and other options
 - **Help** -- in-app guide to how Hazel works
 
 Always run Preview first so you can review the layout before committing.
+
+---
+
+## Tools
+
+The **Tools** submenu contains small utilities for day-to-day photo work:
+
+### EXIF Viewer
+Pick any photo and Hazel displays its embedded metadata: camera make and model,
+lens, date/time, shutter speed, aperture, ISO, focal length (including 35mm
+equivalent), flash, white balance, and GPS coordinates.
+
+### Duplicate Finder
+Scans any folder, MD5-hashes every file, and reports groups of identical files
+along with how much disk space each duplicate group is wasting.
+
+### Storage Stats
+Shows a size breakdown of your export folder. Displays the number of files and
+total bytes per year and per file type, with bar charts so you can see at a
+glance where your storage is going.
+
+### Unpaired RAW / JPG Finder
+Matches RAW files (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF, and others) against
+JPG files by filename stem and reports anything that lacks a pair. Useful for
+checking whether a cull left orphaned RAWs or for verifying that every JPG proof
+has a corresponding RAW.
 
 ---
 
