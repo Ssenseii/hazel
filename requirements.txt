@@ -1,0 +1,6 @@
+questionary
+pyfiglet
+colorama
+click
+pyyaml
+exifread
